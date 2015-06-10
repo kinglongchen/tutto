@@ -1,0 +1,727 @@
+<!DOCTYPE HTML>  
+<html>  
+<head>  
+<meta name="viewport" content="initial-scale=1.0, user-scalable=no" >  
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">  
+<title>路网编辑</title>  
+<style type="text/css">  
+	html { height:100% }  
+	body { height:100%; margin:0px; padding:0px }  
+	#map { height:95% }  
+</style>  
+<script type="text/javascript"  
+	src="http://api.amap.com/webapi/init?v=1.1">  
+</script> 
+<script type="text/javascript"> 
+var mapObj;
+var new_road_path;//经纬度坐标数组
+var new_roadPlines_arr;
+var plineEditor_arr;//存入折线编辑器
+var edit_pline_arr;//存入多选时的路段
+var map_click_mod=-1;//地图点击的模式
+var pline_selec_mod=-1;//线段的选择模式，用于多选线段的判断。 
+var amap_centx=120.153069;
+var amap_centy= 30.265257;
+var plineid=-1;//plineid为负值以区分没有存入到数据库
+var mark_id_arr;//存储标记的数组，用于管理marker
+var mark_alloc_id=0;
+var can_add_road = false;
+var all_road_info = new Array();
+
+///编辑路段时，正在编辑路段名，以及路段的id
+var edit_road_name=null;
+var edit_road_id=null;
+/////////////////////////////////////////
+	function initialize() {  
+		mapObj = new AMap.Map("map"); // 创建地图实例  
+		var point = new AMap.LngLat(amap_centx,amap_centy); // 创建点坐标  
+		mapObj.setCenter(point); // 设置地图中心点坐标 
+		mapObj.setZoom(16);
+		//画出所有的路劲折线；
+		draw_all_Roads();
+		new_roadPlines_arr=new Array();
+		plineEditor_arr=new Array();
+		edit_pline_arr=new Array();
+		mark_id_arr=new Array();
+		//右键菜单
+	mapobj_contextmenu = new AMap.ContextMenu();
+	mapobj_contextmenu.addItem("添加路段",addRoad,0);
+	mapobj_contextmenu.addItem("提交路段",commitRoads,1);
+	//mapobj_contextmenu.addItem("关联路段",associRoad,2);
+	//mapobj_contextmenu.addItem("拆分路段",splitRoad,3);
+	mapobj_contextmenu.addItem("删除路段",deleRoad,4);
+	mapobj_contextmenu.addItem("取消选择",cancel_Pline_selec,5);
+	
+	
+	
+	
+	mapObj.bind(mapObj,"click",function(e){ 
+	 	if(event.button!=0)return;
+		switch (map_click_mod) {
+			case 0: {
+				new_road_path.push(e.lnglat);
+ 				map_click_mod=1;break}
+			case 1: {
+				
+				new_road_path.push(e.lnglat);
+				var new_road_pline = new AMap.Polyline({ 
+			 	id:plineid,
+     			path:new_road_path,    
+     			strokeColor:"#F00",    
+     			strokeOpacity:0.4,    
+     			strokeWeight:5,    
+     			strokeStyle:"dashed",    
+     			strokeDasharray:[10,5]    
+ 				});
+				
+ 			//点击折线进入编辑状态
+ 			mapObj.bind(new_road_pline, "click",function() {
+			//添加折线编辑插件
+				Done_Pline_selec(new_road_pline);
+		});//mapObj.bind(new_road_pline, "click",function() 
+		var new_road_info = new Array();
+		new_road_info.push(edit_road_id+","+edit_road_name+"#");
+		new_road_info.push(new_road_pline);
+		new_roadPlines_arr.push(new_road_info);
+		mapObj.addOverlays(new_road_pline);
+ 		plineid--;//plineid为负值以区分没有存入到数据库
+ 		map_click_mod=-1;
+ 		break;
+				}//case 1
+		//case 2:{cancel_Pline_selec(); break}
+			
+	}//switch   
+},"system");//mapObj.bind(mapObj,"click",function(e)
+
+
+mapObj.bind(mapObj,"rightclick",function(e){
+		mapobj_contextmenu.open(mapObj,e.lnglat);
+	});
+	
+///////test//////////////////////////////////////////////////////
+/////////////////////////////////////////////
+/////
+get_rnameinfo();
+/////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+}  //initialize() 地图初始化；
+
+
+
+
+	
+
+function addRoad() {
+	if (can_add_road) {
+		map_click_mod=0;
+		new_road_path = new Array();//经纬度坐标数组
+		can_add_road = false;
+		}
+	}
+	
+	
+	
+var commit_road_xmlHttp=null;
+//提交路段，添加的路段数据仍在本地，没有加入到数据库，提交就是加入到数据库中
+function commitRoads() {
+	var temp_road_pl;
+	var temp_roadid;
+	var temp_road_path;
+	var node_str=new String();
+	//提交时取消原先路段的选择
+	cancel_Pline_selec();
+//提交语句段
+for(var i=0;i<new_roadPlines_arr.length-1;i++) {
+	node_str+=new_roadPlines_arr[i][0];
+	temp_road_pl=new_roadPlines_arr[i][1];
+	temp_road_path=temp_road_pl.getPath();
+	node_str+= (temp_road_path[0].lng).toString()+","+(temp_road_path[0].lat).toString();
+	for (var j=1;j<temp_road_path.length;j++)
+	node_str+= ","+(temp_road_path[j].lng).toString()+","+(temp_road_path[j].lat).toString();
+	node_str+=";";
+	mapObj.removeOverlays(temp_road_pl);	
+	}// for $i
+	//这里需要单独处理最后一个路径折线，以保持格式：为 *#*,*,*,*;*#*,*,*,;
+	node_str+=new_roadPlines_arr[i][0];
+	temp_road_pl=new_roadPlines_arr[new_roadPlines_arr.length-1][1];
+	temp_road_path=temp_road_pl.getPath();
+	node_str+= (temp_road_path[0].lng).toString()+","+(temp_road_path[0].lat).toString();
+	for (var j=1;j<temp_road_path.length;j++)
+	node_str+= ","+(temp_road_path[j].lng).toString()+","+(temp_road_path[j].lat).toString();
+	mapObj.removeOverlays(temp_road_pl);
+	
+	var url="server4roads_commit.php";
+commit_road_xmlHttp=GetXmlHttpRequest();
+if(!commit_road_xmlHttp)
+		{
+			alert("浏览器不支持XmlHttpRequest!");
+			}
+			commit_road_xmlHttp.open("POST",url,true);
+			commit_road_xmlHttp.onreadystatechange=roads_Commit_Response;
+			commit_road_xmlHttp.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+			commit_road_xmlHttp.send("node_str="+node_str);
+			new_roadPlines_arr.length=0;
+}//commit_Roads
+
+
+
+
+
+var associ_road_xmlHttp=null;
+function associRoad() {
+	for (var i=0;i<edit_pline_arr.length;i++) {
+		if(edit_pline_arr[i].id<0) {
+			alert("有未提交的路段！");
+			return;
+			}
+		}
+	var road_vertex_dist_arr=new Array();
+	var associ_roadinfo_arr=new Array();
+	for (var i=0;i<edit_pline_arr.length;i++){
+		
+		for (var j=i+1;j<edit_pline_arr.length;j++) {
+			com_road_pline_fun(edit_pline_arr[i],edit_pline_arr[j],road_vertex_dist_arr);
+			}
+		}
+		
+	for (var i=0;i<edit_pline_arr.length-1;i++) {
+		var road_node1_path=road_vertex_dist_arr[i][0].getPath();
+		
+		var road_node2_path=road_vertex_dist_arr[i][2].getPath();
+		if(!associ_roadinfo_arr.contains((road_vertex_dist_arr[i][0].id).toString()+','+(road_vertex_dist_arr[i][1]).toString()+';')) {
+			associ_roadinfo_arr.push((road_vertex_dist_arr[i][0].id).toString()+','+(road_vertex_dist_arr[i][1]).toString()+';');
+		addMark(road_node1_path[road_vertex_dist_arr[i][1]],mark_alloc_id);
+			} 
+		if(!associ_roadinfo_arr.contains((road_vertex_dist_arr[i][2].id).toString()+','+(road_vertex_dist_arr[i][3]).toString()+';')) {
+			associ_roadinfo_arr.push((road_vertex_dist_arr[i][2].id).toString()+','+(road_vertex_dist_arr[i][3]).toString()+';');
+		addMark(road_node2_path[road_vertex_dist_arr[i][3]],mark_alloc_id);
+			} 
+		
+		
+			
+		}//for (var i=0;i<edit_pline_arr.length-1;i++) {
+		
+		var associ_road_str="";
+			for(var i=0;i<associ_roadinfo_arr.length;i++)
+				associ_road_str+=associ_roadinfo_arr[i];
+				associ_road_str=associ_road_str.slice(0,associ_road_str.length-1);
+				
+				
+				
+				if(confirm( "确定关联这"+edit_pline_arr.length+"个点？")) {
+					var url="server4roads_associ.php";
+					associ_road_xmlHttp=GetXmlHttpRequest();
+					if(!associ_road_xmlHttp) {
+						alert("浏览器不支持XmlHttpRequest!");
+					}
+					associ_road_xmlHttp.open("POST",url,true);
+					associ_road_xmlHttp.onreadystatechange=roads_Associ_Response;
+					associ_road_xmlHttp.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+					associ_road_xmlHttp.send("associ_road_str="+associ_road_str);
+				}
+		cancel_Pline_selec();
+		del_all_Marker();	
+				
+				
+	}
+
+
+
+
+ var get_roadname_xmlHttp=null;
+function get_rnameinfo() {
+
+					var url="get_all_roadname.php";
+					get_roadname_xmlHttp=GetXmlHttpRequest();
+					if(!get_roadname_xmlHttp) {
+						alert("浏览器不支持XmlHttpRequest!");
+					}
+					
+					get_roadname_xmlHttp.open("GET",url,true);
+					
+					get_roadname_xmlHttp.onreadystatechange=get_roadname_Response;
+					
+					get_roadname_xmlHttp.send(null);	
+					
+						
+	}
+
+var rname_arr = new Array();	
+function get_roadname_Response() {
+	
+		if (get_roadname_xmlHttp.readyState==4 &&get_roadname_xmlHttp.status==200) {
+			
+			var textDoc=get_roadname_xmlHttp.responseText;
+			var rnames_str = textDoc.split(';');
+			var rnamecount = 0;
+			var rnamegroup_arr = new Array();
+			for (var i = 0;i<rnames_str.length;i++) {
+				rnamecount++;
+				rnamegroup_arr.push(rnames_str[i]);
+				if (rnamecount == 40) {
+					//alert ("as"+rnamegroup_arr.length);
+					rname_arr.push(rnamegroup_arr);
+					rnamecount = 0;
+					rnamegroup_arr= new Array();//清空数组
+					}
+				}
+			rname_arr.push(rnamegroup_arr);
+			}//if (get_roadname_xmlHttp
+		
+		}
+	
+	
+	
+	
+
+	
+var del_road_xmlHttp;
+function deleRoad() {
+	var delete_roadids_str="";
+	
+	for (var i=0;i<edit_pline_arr.length;i++) {
+		
+		delete_roadids_str+=(edit_pline_arr[i].id).toString()+";";
+		}
+		delete_roadids_str=delete_roadids_str.slice(0,delete_roadids_str.length-1);
+		if(confirm( "确定删除这"+edit_pline_arr.length+"条路段？")) {
+					var url="server4roads_del.php";
+					del_road_xmlHttp=GetXmlHttpRequest();
+					if(!del_road_xmlHttp) {
+						alert("浏览器不支持XmlHttpRequest!");
+					}
+					del_road_xmlHttp.open("POST",url,true);
+					del_road_xmlHttp.onreadystatechange=roads_Del_Response;
+					del_road_xmlHttp.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+					del_road_xmlHttp.send("delete_roadids_str="+delete_roadids_str);
+				}
+		
+}
+
+function roads_Del_Response() {
+	if (del_road_xmlHttp.readyState==4 &&del_road_xmlHttp.status==200) {
+			var xmlDoc=del_road_xmlHttp.responseText;
+			for (var i=0;i<edit_pline_arr.length;i++)
+				mapObj.removeOverlays(edit_pline_arr[i].id);
+			cancel_Pline_selec();
+			
+	}
+	
+	}
+	
+function com_road_pline_fun(road_pline1,road_pline2,result_arr) {
+	
+	var road_pline1_path=road_pline1.getPath();
+	var road_pline2_path=road_pline2.getPath();
+	var node1_index;
+	var node2_index;
+	
+	for (var i=0;i<2;i++) {
+		switch(i) {
+			case 0:{node1_index=0;break;}
+			case 1:{node1_index=road_pline1_path.length-1;break;}
+			}
+		for (var j=0;j<2;j++)
+			{
+				
+				switch(j) {
+					case 0:{node2_index=0;break;}
+					case 1:{node2_index=road_pline2_path.length-1;break;}
+					}
+				var temp_arr=new Array();
+				temp_arr.push(road_pline1);
+				temp_arr.push(node1_index);
+				temp_arr.push(road_pline2);
+				temp_arr.push(node2_index);
+				temp_arr.push(get_Point_dist(road_pline1_path[node1_index],road_pline2_path[node2_index]));
+				insert_result_Array(temp_arr,result_arr);
+				}
+		}
+		
+	}
+	
+function insert_result_Array(insert_arr,result_arr) {
+	var comp_val1=insert_arr[4];
+	var comp_val2;
+	var i;
+	
+	if (result_arr.length==0) result_arr.push(insert_arr);
+	else{
+		
+	 for (i=result_arr.length-1;i>=0;i--) {
+		 comp_val2=result_arr[i];
+		 if(comp_val1>comp_val2[4]) break;
+		 }
+		result_arr.splice(i+1,0,insert_arr); 
+	  }
+  }
+		
+	
+	
+function get_Point_dist(lnglat1,lnglat2) {
+	
+	return Math.sqrt(Math.pow(lnglat2.lng-lnglat1.lng,2)+Math.pow(lnglat2.lat-lnglat1.lat,2));
+	}
+	
+function GetXmlHttpRequest()
+{
+	
+	var xmlHttp=null;
+	try
+	{
+		xmlHttp=new XMLHttpRequest();
+		}
+		catch(e)
+		{
+			try
+			{
+				xmlHttp=new ActiveXObject("Msxml2.XMLHTTP");
+				}
+				catch(e)
+				{
+					try
+					{
+						xmlHttp=new ActiveXObject("Microsoft.XMLHTTP");
+						}
+						catch(e)
+						{
+							xmlHttp=false;
+							}
+					}
+			}
+			
+			return xmlHttp;
+	}
+	
+	
+	function roads_Associ_Response() {
+		if (associ_road_xmlHttp.readyState==4 &&associ_road_xmlHttp.status==200) {
+			var xmlDoc=associ_road_xmlHttp.responseXML;
+			var roads= xmlDoc.getElementsByTagName("road");
+			var roadinfo_list=new Array();
+			for(var i=0;i<roads.length;i++) {
+				var roadinfo=new Array();
+				road=roads[i];
+				var roadid=road.getElementsByTagName("roadid")[0].childNodes[0].nodeValue;
+				roadinfo.push(roadid);
+				var nodes=road.getElementsByTagName("node");
+				for(var j=0;j<nodes.length;j++) {
+					node=nodes[j];
+					var nodid=(node.getElementsByTagName("nodeid"))[0].childNodes[0].nodeValue;
+					var nodx=((node.getElementsByTagName("nodx"))[0].childNodes[0].nodeValue)*1;
+					var nody=((node.getElementsByTagName("nody"))[0].childNodes[0].nodeValue)*1;
+					roadinfo.push(nodx);
+					roadinfo.push(nody);
+					}//for j
+					roadinfo_list.push(roadinfo);//push(1)表示路况信息，用来表示线的颜色
+					
+				}//for i
+				addRoadInfo(roadinfo_list);
+			}//if (commit_road
+		
+		}
+		
+		
+	function roads_Commit_Response() {
+		if (commit_road_xmlHttp.readyState==4 &&commit_road_xmlHttp.status==200) {
+			var xmlDoc=commit_road_xmlHttp.responseXML;
+			var roads= xmlDoc.getElementsByTagName("road");
+			var roadinfo_list=new Array();
+			for(var i=0;i<roads.length;i++) {
+				var roadinfo=new Array();
+				road=roads[i];
+				var roadid=road.getElementsByTagName("roadid")[0].childNodes[0].nodeValue;
+				roadinfo.push(roadid);
+				var nodes=road.getElementsByTagName("node");
+				for(var j=0;j<nodes.length;j++) {
+					node=nodes[j];
+					var nodid=(node.getElementsByTagName("nodeid"))[0].childNodes[0].nodeValue;
+					var nodx=((node.getElementsByTagName("nodx"))[0].childNodes[0].nodeValue)*1;
+					var nody=((node.getElementsByTagName("nody"))[0].childNodes[0].nodeValue)*1;
+					roadinfo.push(nodx);
+					roadinfo.push(nody);
+					}//for j
+					roadinfo_list.push(roadinfo);//push(1)表示路况信息，用来表示线的颜色
+					
+				}//for i
+				addRoadInfo(roadinfo_list);
+			}//if (commit_road
+		}//roads_Commit_Response()
+	
+	
+	var all_road_xmlHttp=null;
+	function draw_all_Roads() {
+		var url="server4obtain_all_roads.php";
+		all_road_xmlHttp=GetXmlHttpRequest();
+		if(!all_road_xmlHttp) {
+			alert("浏览器不支持XmlHttpRequest!");
+			}
+			all_road_xmlHttp.open("GET",url,true);
+			all_road_xmlHttp.onreadystatechange=obt_all_Roads_Res;
+			all_road_xmlHttp.send(null);
+	}	
+	
+	
+	function obt_all_Roads_Res() {
+		if (all_road_xmlHttp.readyState==4 &&all_road_xmlHttp.status==200) {
+			var xmlDoc=all_road_xmlHttp.responseXML;
+			var roads= xmlDoc.getElementsByTagName("road");
+			var roadinfo_list=new Array();
+			for(var i=0;i<roads.length;i++) {
+				var roadinfo=new Array();
+				road=roads[i];
+				var roadid=road.getElementsByTagName("roadid")[0].childNodes[0].nodeValue;
+				roadinfo.push(roadid);
+				var nodes=road.getElementsByTagName("node");
+				for(var j=0;j<nodes.length;j++) {
+					node=nodes[j];
+					var nodid=(node.getElementsByTagName("nodeid"))[0].childNodes[0].nodeValue;
+					var nodx=((node.getElementsByTagName("nodx"))[0].childNodes[0].nodeValue)*1;
+					var nody=((node.getElementsByTagName("nody"))[0].childNodes[0].nodeValue)*1;
+					roadinfo.push(nodx);
+					roadinfo.push(nody);
+					}//for j
+					roadinfo_list.push(roadinfo);//push(1)表示路况信息，用来表示线的颜色
+					
+				}//for i
+				addRoadInfo(roadinfo_list);
+			}//if (commit_road
+		}	
+		
+		
+	function addRoadInfo(roadinfo_list)
+  {
+  
+ // var roadinfo_Pline;
+  var roadinfo_Path;
+  var roadid;
+  if(roadinfo_list!=null)
+  for(var i=0;i<roadinfo_list.length;i++)
+  {
+	  var roadinfo=roadinfo_list[i];
+		var col=1;
+		roadid=roadinfo[0];
+		roadinfo_Path=new Array();
+		for(var j=1;j<roadinfo.length;j+=2)
+		{		
+			  roadinfo_Path.push(new AMap.LngLat(roadinfo[j],roadinfo[j+1]));
+			  //addMark(new AMap.LngLat(roadinfo[j],roadinfo[j+1]),"asdf");
+			}//for(j)
+		addPLine(col,roadid,roadinfo_Path);
+	  }//for i;
+	//
+  }//addRoadInfo
+  
+  
+ function addPLine(col,id,plinePath) {
+	var strokew=3;
+	var add_road = new Array();
+	add_road.push(id);
+	add_road.push(plinePath[Math.floor(plinePath.length/2)]);
+	all_road_info.push(add_road);
+	switch (col) {
+		case 1:var roadinfo_Pline=new AMap.Polyline({
+	id:id,
+	path:plinePath,
+	strokeColor:"#FF0000",//线颜色
+	strokeOpacity:1,//线透明度
+	strokeWeight:strokew,//线宽
+  });break;
+		case 2:var roadinfo_Pline=new AMap.Polyline({
+	id:id,
+   	path:plinePath,
+	strokeColor:"#00FF00",//线颜色
+	strokeOpacity:1,//线透明度
+	strokeWeight:strokew,//线宽
+  });break;
+		case 3:var roadinfo_Pline=new AMap.Polyline({
+	id:id,
+    path:plinePath,
+	strokeColor:"#FFFF00",//线颜色
+	strokeOpacity:1,//线透明度
+	strokeWeight:strokew,//线宽
+  });break;
+		default:
+			break;
+		}
+	//if(i==2)	
+	//点击折线进入编辑状态
+	//alert("查看："+roadinfo_Pline.id);
+ 	mapObj.bind(roadinfo_Pline, "click",function() {
+	//添加折线编辑插件
+			Done_Pline_selec(roadinfo_Pline);
+		});//mapObj.bind(new_road_pline, "click",function() 
+	mapObj.addOverlays(roadinfo_Pline);
+	 
+	 }//function addPline()
+ 
+ 
+ function splitRoad() {
+	alert(edit_pline_arr.length);
+	 } 
+
+
+//取消所有的路段选择；	 
+ function cancel_Pline_selec() {
+	if(!event.ctrlKey) {
+		while(plineEditor_arr.length!=0) {
+			 
+			edit_pline_arr.pop();
+			var temp_polylineEditor=plineEditor_arr.pop();
+			temp_polylineEditor.close();
+			temp_polylineEditor=null;
+			}
+		map_click_mod=-1;
+		return true;
+		}		
+		return false;
+	}
+	
+	
+function Done_Pline_selec(road_Pline) {
+	cancel_Pline_selec();
+	if(!edit_pline_arr.contains(road_Pline))
+	mapObj.plugin(["AMap.PolyEditor"],function(){  
+         var polylineEditor = new AMap.PolyEditor(mapObj,road_Pline);
+		  plineEditor_arr.push(polylineEditor);
+		  edit_pline_arr.push(road_Pline);
+          polylineEditor.open(); 
+		  map_click_mod=2;
+           }); 
+	}	
+  function keydown_fun() {
+	  
+	  }
+  function keyup_fun() {
+	  
+	  }
+	  
+function get_exitpline_mnode(id) {
+	for (var i = 0;i<all_road_info.length;i++) {
+		var temp_road_info = all_road_info[i];
+		if (id == temp_road_info[0])return temp_road_info[1];
+		}
+		return null;
+	
+	}	
+	
+	
+	  
+function is_in_new_roadPlines_arr (id) {
+	for (var i = 0;i<new_roadPlines_arr.length;i++) {
+		var temp_roadid = new_roadPlines_arr[i][0].split(",")[0];
+		if(id== temp_roadid) return true;
+		}
+		return false;
+	} 
+	  
+	  
+	  
+	  
+Array.prototype.contains = function(obj) { 
+	var i = this.length; 
+	while (i--) { 
+		if (this[i] === obj) { 
+			return true; 
+		} 
+	} 
+return false; 
+} 
+/*
+添加mark用的，主要
+
+
+*/  
+function addMark(location,markerid)
+  {
+	  var marker = new AMap.Marker({
+		id: markerid, 
+		position: location,  
+		offset:{x:-8,y:-34} , 
+		icon:"http://api.amap.com/webapi/static/Images/marker_sprite.png"  
+});// 自定义构造AMap.Marker对象
+markerid+=1;
+marker.setDraggable(true);
+mark_id_arr.push(marker.id);
+mapObj.addOverlays(marker); //加载覆盖物
+
+mapObj.bind(marker,'click',function() {
+	
+	del_Marker(marker);
+	
+	});//  mapObj.bing(marker,'dbclick',function() {
+	  }
+	  
+	  
+	  
+function del_Marker(marker) {
+	var i=0;
+	var id=marker.id;
+	mapObj.removeOverlays(id);
+	while (mark_id_arr[i]!=id&&i<mark_id_arr.length)i++;
+	if(i<mark_id_arr.length) mark_id_arr.splice(i,1);
+	}
+function del_all_Marker() {
+	mapObj.removeOverlays(mark_id_arr);
+	mark_id_arr.length=0;
+	}
+	
+
+function test() {
+	var sltRG=document.getElementById("roadgroup");
+	var sltR=document.getElementById("roadname");
+ 	var roadgroup_road=rname_arr[sltRG.selectedIndex-1];
+	sltR.length=1;
+ 	for(var i=0;i<roadgroup_road.length;i++){
+		var roadnameinfo_arr = roadgroup_road[i].split(",");
+		var isexit = roadnameinfo_arr[3]==0?"N":"Y";
+		var roadname = roadnameinfo_arr[0]+":"+roadnameinfo_arr[1]+":"+roadnameinfo_arr[2]+":"+isexit;
+ 		sltR[i+1]=new Option(roadname,roadname);
+ 		}
+	}
+function roadselect() {
+	var sltR=document.getElementById("roadname");
+	var roadinfo = sltR.value.split(":");
+	var temp_road_id = roadinfo[0];
+	var exit_pline_point=get_exitpline_mnode(temp_road_id);
+	if(exit_pline_point!=null) {
+	alert ("已存在！！！");
+	mapObj.setCenter(exit_pline_point);
+		}
+	else {
+		if (is_in_new_roadPlines_arr(temp_road_id)) alert("正在编辑中...");
+		else {
+		edit_road_name = roadinfo[1]+roadinfo[2];
+		edit_road_id = roadinfo[0];
+		can_add_road = true;	
+			}
+		}
+	}
+</script>  
+</head>
+  
+<body onload="initialize()" onkeydown="keydown_fun()">
+	<!--<div id="map" style="width:1350px;height:565px;border:#F6F6F6 solid 1px;"></div>-->
+    <select id="roadgroup" name="roadgroup" size="1" onchange="test()">
+    	<option value="0">--请选择组--</option>
+		<option value="组1">组1</option>
+  		<option value="组2">组2</option>
+   		<option value="组3">组3</option>
+        <option value="组4">组4</option>
+        <option value="组5">组5</option>
+        <option value="组6">组6</option>
+        <option value="组7">组7</option>
+        <option value="组8">组8</option>
+        <option value="组9">组9</option>
+        <option value="组10">组10</option>
+        <option value="组11">组11</option>
+        <option value="组12">组12</option>
+        
+	</select>
+    <select id="roadname" name="roadname" size="1" onChange="roadselect()">
+		<option value="0">--请选择编辑路段--</option>
+	</select>
+    <div id="map"></div> 
+    
+</body>  
+</html>  
